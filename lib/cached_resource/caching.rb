@@ -133,19 +133,19 @@ module CachedResource
       def json_to_object(json)
         if json.is_a? Array
           json.map { |attrs|
-            self.new(attrs["object"], attrs["persistence"]) }
+            self.new(attrs["object"].merge(attrs["prefix_options"]), attrs["persistence"]) }
         else
-          self.new(json["object"], json["persistence"])
+          self.new(json["object"].merge(json["prefix_options"]), json["persistence"])
         end
       end
 
       def object_to_json(object)
         if object.is_a? Enumerable
-           object.map { |o| { :object => o, :persistence => o.persisted? } }.to_json
+          object.map { |o| { :object => o, :persistence => o.persisted?, :prefix_options => o.prefix_options } }.to_json
         elsif object.nil?
           nil.to_json
         else
-          { :object => object, :persistence => object.persisted? }.to_json
+          { :object => object, :persistence => object.persisted?, :prefix_options => object.prefix_options }.to_json
         end
       end
     end
