@@ -70,7 +70,7 @@ module CachedResource
         collection = cache_read(cache_key(cached_resource.collection_arguments))
 
         if collection && !updates.empty?
-          index = collection.inject({}) { |hash, object| hash[object.send(primary_key)] = object; hash }
+          index = collection.index_by { |object| object.send(primary_key); }
           updates.each { |object| index[object.send(primary_key)] = object }
           cache_write(cache_key(cached_resource.collection_arguments), index.values)
         end
@@ -85,14 +85,20 @@ module CachedResource
       # Read a entry from the cache for the given key.
       def cache_read(key)
         object = cached_resource.cache.read(key).try do |json_cache|
-
           json = ActiveSupport::JSON.decode(json_cache)
 
           unless json.nil?
             cache = json_to_object(json)
-            if cache.is_a? Enumerable
+            if cache.key?(:pagination_link_headers)
+              restored = cache[:elements].map { |record| full_dup(record) }
+              next restored unless respond_to?(:collection_parser)
+
+              collection_parser.new({ elements: restored, pagination_link_headers: cache[:pagination_link_headers] })
+
+            elsif cache.is_a? Enumerable
               restored = cache.map { |record| full_dup(record) }
               next restored unless respond_to?(:collection_parser)
+
               collection_parser.new(restored)
             else
               full_dup(cache)
@@ -105,21 +111,21 @@ module CachedResource
 
       # Write an entry to the cache for the given key and value.
       def cache_write(key, object)
-        result = cached_resource.cache.write(key, object_to_json(object), :race_condition_ttl => cached_resource.race_condition_ttl, :expires_in => cached_resource.generate_ttl)
+        result = cached_resource.cache.write(key, object_to_json(object), race_condition_ttl: cached_resource.race_condition_ttl, expires_in: cached_resource.generate_ttl)
         result && cached_resource.logger.info("#{CachedResource::Configuration::LOGGER_PREFIX} WRITE #{key}")
         result
       end
 
       # Clear the cache.
       def cache_clear
-        cached_resource.cache.clear.tap do |result|
+        cached_resource.cache.clear.tap do |_result|
           cached_resource.logger.info("#{CachedResource::Configuration::LOGGER_PREFIX} CLEAR")
         end
       end
 
       # Generate the request cache key.
       def cache_key(*arguments)
-        "#{name.parameterize.gsub("-", "/")}/#{arguments.join('/')}".downcase.delete(' ')
+        "#{name.parameterize.tr('-', '/')}/#{arguments.join('/')}".downcase.delete(' ')
       end
 
       # Make a full duplicate of an ActiveResource record.
@@ -131,21 +137,35 @@ module CachedResource
       end
 
       def json_to_object(json)
-        if json.is_a? Array
-          json.map { |attrs|
-            self.new(attrs["object"].merge(attrs["prefix_options"]), attrs["persistence"]) }
+        if json.key?('pagination_link_headers')
+          elements = json['elements'].map do |attrs|
+            new(attrs['object'].merge(attrs['prefix_options']), attrs['persistence'])
+          end
+          {
+            pagination_link_headers: json['pagination_link_headers'],
+            elements: elements
+          }
+        elsif json.is_a? Array
+          json.map do |attrs|
+            new(attrs['object'].merge(attrs['prefix_options']), attrs['persistence'])
+          end
         else
-          self.new(json["object"].merge(json["prefix_options"]), json["persistence"])
+          new(json['object'].merge(json['prefix_options']), json['persistence'])
         end
       end
 
       def object_to_json(object)
-        if object.is_a? Enumerable
-          object.map { |o| { :object => o, :persistence => o.persisted?, :prefix_options => o.prefix_options } }.to_json
+        if object.instance_of?(ShopifyAPI::PaginatedCollection)
+          {
+            pagination_link_headers: object.pagination_link_headers,
+            elements: object.map { |o| { object: o, persistence: o.persisted?, prefix_options: o.prefix_options } }
+          }.to_json
+        elsif object.is_a? Enumerable
+          object.map { |o| { object: o, persistence: o.persisted?, prefix_options: o.prefix_options } }.to_json
         elsif object.nil?
           nil.to_json
         else
-          { :object => object, :persistence => object.persisted?, :prefix_options => object.prefix_options }.to_json
+          { object: object, persistence: object.persisted?, prefix_options: object.prefix_options }.to_json
         end
       end
     end
