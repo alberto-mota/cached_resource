@@ -89,7 +89,7 @@ module CachedResource
 
           unless json.nil?
             cache = json_to_object(json)
-            if cache.key?(:pagination_link_headers)
+            if cache.respond_to?(:key) && cache.key?(:pagination_link_headers)
               restored = cache[:elements].map { |record| full_dup(record) }
               next restored unless respond_to?(:collection_parser)
 
@@ -137,7 +137,7 @@ module CachedResource
       end
 
       def json_to_object(json)
-        if json.key?('pagination_link_headers')
+        if json.respond_to?(:key) && json.key?('pagination_link_headers')
           elements = json['elements'].map do |attrs|
             new(attrs['object'].merge(attrs['prefix_options']), attrs['persistence'])
           end
